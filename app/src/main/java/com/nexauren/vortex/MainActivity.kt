@@ -368,14 +368,48 @@ private fun videoPermissions(): Array<String> = when {
 @Composable
 private fun VortexLogo(size: androidx.compose.ui.unit.Dp = 54.dp) {
     Box(
-        Modifier.size(size).clip(RoundedCornerShape(size / 3)).background(
-            Brush.linearGradient(listOf(Color(0xFF090B25), Color(0xFF3420A4), Color(0xFF0D79E8)))
-        ), contentAlignment = Alignment.Center
+        Modifier.size(size)
+            .clip(RoundedCornerShape(size / 3))
+            .background(
+                Brush.linearGradient(
+                    listOf(Color(0xFF080B22), Color(0xFF271078), Color(0xFF071F4C))
+                )
+            ),
+        contentAlignment = Alignment.Center
     ) {
-        Icon(Icons.Default.PlayArrow, contentDescription = "Vortex", tint = Color.White, modifier = Modifier.size(size * 0.74f))
+        Canvas(Modifier.fillMaxSize().padding(size * 0.15f)) {
+            val w = this.size.width
+            val h = this.size.height
+            val ribbon = androidx.compose.ui.graphics.Path().apply {
+                moveTo(w * 0.14f, h * 0.05f)
+                cubicTo(w * 0.04f, h * 0.00f, w * 0.00f, h * 0.10f, w * 0.02f, h * 0.24f)
+                lineTo(w * 0.02f, h * 0.76f)
+                cubicTo(w * 0.02f, h * 0.93f, w * 0.09f, h * 0.99f, w * 0.23f, h * 0.91f)
+                lineTo(w * 0.88f, h * 0.58f)
+                cubicTo(w * 1.03f, h * 0.51f, w * 1.03f, h * 0.45f, w * 0.88f, h * 0.38f)
+                lineTo(w * 0.14f, h * 0.05f)
+                close()
+            }
+            drawPath(
+                ribbon,
+                Brush.linearGradient(
+                    listOf(Color(0xFF9D35FF), Color(0xFF4B3CFF), Color(0xFF00BFFF))
+                )
+            )
+            val play = androidx.compose.ui.graphics.Path().apply {
+                moveTo(w * 0.37f, h * 0.28f)
+                cubicTo(w * 0.34f, h * 0.26f, w * 0.32f, h * 0.29f, w * 0.32f, h * 0.34f)
+                lineTo(w * 0.32f, h * 0.66f)
+                cubicTo(w * 0.32f, h * 0.71f, w * 0.35f, h * 0.73f, w * 0.39f, h * 0.70f)
+                lineTo(w * 0.66f, h * 0.55f)
+                cubicTo(w * 0.71f, h * 0.52f, w * 0.71f, h * 0.48f, w * 0.66f, h * 0.45f)
+                lineTo(w * 0.37f, h * 0.28f)
+                close()
+            }
+            drawPath(play, Color(0xFF10122F))
+        }
     }
 }
-
 @Composable
 private fun WelcomeScreen(onStart: () -> Unit) {
     Box(Modifier.fillMaxSize().background(Color.White)) {
