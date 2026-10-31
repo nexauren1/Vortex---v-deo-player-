@@ -124,6 +124,7 @@ private fun VortexRoot(activity: MainActivity) {
     var permission by remember { mutableStateOf(hasVideoPermission(context)) }
     var selectedVideo by remember { mutableStateOf<LocalVideo?>(null) }
     var selectedFolder by remember { mutableStateOf<String?>(null) }
+    var pipEnabled by remember { mutableStateOf(prefs.getBoolean("pip_enabled", true)) }
     var favorites by remember { mutableStateOf(prefs.getStringSet("favorite_ids", emptySet())?.toSet() ?: emptySet()) }
 
     fun scan() {
@@ -164,7 +165,7 @@ private fun VortexRoot(activity: MainActivity) {
     }
 
     selectedVideo?.let {
-        PlayerScreen(activity, it) { selectedVideo = null }
+        PlayerScreen(activity, it, pipEnabled) { selectedVideo = null }
         return
     }
 
@@ -213,9 +214,14 @@ private fun VortexRoot(activity: MainActivity) {
                 Tab.FOLDERS -> FoldersScreen(videos) { selectedFolder = it; tab = Tab.LIBRARY }
                 Tab.FAVORITES -> FavoritesScreen(videos.filter { it.id.toString() in favorites },
                     onOpen = { selectedVideo = it }, onFavorite = ::toggleFavorite)
-                Tab.SETTINGS -> SettingsScreen(prefs) {
-                    if (hasVideoPermission(context)) scan() else requestAccess()
-                }
+                Tab.SETTINGS -> SettingsScreen(
+                    pipEnabled = pipEnabled,
+                    onPipChange = {
+                        pipEnabled = it
+                        prefs.edit().putBoolean("pip_enabled", it).apply()
+                    },
+                    onRescan = { if (hasVideoPermission(context)) scan() else requestAccess() }
+                )
             }
         }
     }
@@ -466,23 +472,18 @@ private fun FavoritesScreen(videos: List<LocalVideo>, onOpen: (LocalVideo) -> Un
 }
 
 @Composable
-private fun SettingsScreen(prefs: android.content.SharedPreferences, onRescan: () -> Unit) {
-    var pip by remember { mutableStateOf(prefs.getBoolean("pip_enabled", true)) }
-    var background by remember { mutableStateOf(prefs.getBoolean("background_enabled", true)) }
+private fun SettingsScreen(pipEnabled: Boolean, onPipChange: (Boolean) -> Unit, onRescan: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
         SettingsHeading("Reprodução")
-        SettingSwitch(Icons.Default.PictureInPictureAlt, "Picture-in-Picture", "Continuar a ver enquanto utilizas outras aplicações", pip) {
-            pip = it; prefs.edit().putBoolean("pip_enabled", it).apply()
-        }
-        SettingSwitch(Icons.Default.VolumeUp, "Reprodução em segundo plano", "Manter o áudio ativo ao sair do Vortex", background) {
-            background = it; prefs.edit().putBoolean("background_enabled", it).apply()
-        }
+        SettingSwitch(Icons.Default.PictureInPictureAlt, "Picture-in-Picture", "Continuar a ver enquanto utilizas outras aplicações", pipEnabled, onPipChange)
+        SettingRow(Icons.Default.VolumeUp, "Reprodução em segundo plano", "Sessão multimédia preparada para continuar fora do ecrã")
         SettingRow(Icons.Default.Subtitles, "Legendas", "Faixas incorporadas e controlos no player")
         SettingRow(Icons.Default.Speed, "Velocidade de reprodução", "Controlos de velocidade no player")
         HorizontalDivider(color = Color(0xFFECECF2))
         SettingsHeading("Biblioteca")
         SettingRow(Icons.Default.Refresh, "Atualizar biblioteca", "Voltar a procurar vídeos neste dispositivo", onRescan)
         SettingRow(Icons.Default.Lock, "Privacidade", "Os vídeos permanecem no teu dispositivo")
+        SettingRow(Icons.Default.Cast, "Chromecast", "Base Media3 Cast incluída; ligação ao recetor na próxima etapa")
         HorizontalDivider(color = Color(0xFFECECF2))
         SettingsHeading("Aplicação")
         SettingRow(Icons.Default.Language, "Idioma", "Português")
@@ -562,7 +563,7 @@ private fun VideoThumbnail(video: LocalVideo, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun PlayerScreen(activity: MainActivity, video: LocalVideo, onBack: () -> Unit) {
+private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: Boolean, onBack: () -> Unit) {
     val context = LocalContext.current
     var controller by remember(video.id) { mutableStateOf<MediaController?>(null) }
     var position by remember(video.id) { mutableLongStateOf(0L) }
@@ -615,8 +616,8 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, onBack: () -
                         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !subtitles).build()
                     }
                 }) { Icon(Icons.Default.Subtitles, contentDescription = "Legendas", tint = if (subtitles) Color.White else Muted) }
-                IconButton(onClick = { activity.enterVortexPip() }) {
-                    Icon(Icons.Default.PictureInPictureAlt, contentDescription = "Picture-in-Picture", tint = Color.White)
+                IconButton(enabled = pipEnabled, onClick = { activity.enterVortexPip() }) {
+                    Icon(Icons.Default.PictureInPictureAlt, contentDescription = "Picture-in-Picture", tint = if (pipEnabled) Color.White else Muted)
                 }
             }
         }
@@ -663,8 +664,8 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, onBack: () -
                     IconButton(onClick = { controller?.seekTo((position + 10_000L).coerceAtMost(duration)) }) {
                         Icon(Icons.Default.FastForward, contentDescription = "Avançar", tint = Color.White)
                     }
-                    IconButton(onClick = { activity.enterVortexPip() }) {
-                        Icon(Icons.Default.PictureInPictureAlt, contentDescription = "Picture-in-Picture", tint = Color.White)
+                    IconButton(enabled = pipEnabled, onClick = { activity.enterVortexPip() }) {
+                        Icon(Icons.Default.PictureInPictureAlt, contentDescription = "Picture-in-Picture", tint = if (pipEnabled) Color.White else Muted)
                     }
                 }
             }
