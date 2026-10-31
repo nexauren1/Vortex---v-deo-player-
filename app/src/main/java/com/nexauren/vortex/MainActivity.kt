@@ -59,11 +59,13 @@ import androidx.media3.common.C
 import androidx.media3.cast.MediaRouteButton
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.AspectRatioFrameLayout
 import com.nexauren.vortex.data.LocalVideo
 import com.nexauren.vortex.data.VideoRepository
 import com.nexauren.vortex.playback.PlaybackService
@@ -769,6 +771,11 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
     var subtitles by remember(video.id) { mutableStateOf(true) }
     var externalSubtitleName by remember(video.id) { mutableStateOf<String?>(null) }
     var speed by remember(video.id) { mutableStateOf(1.0f) }
+    var repeatOne by remember(video.id) { mutableStateOf(false) }
+    var resizeMode by remember(video.id) { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
+    var toolsExpanded by remember(video.id) { mutableStateOf(false) }
+    var timerDialog by remember(video.id) { mutableStateOf(false) }
+    var sleepMinutes by remember(video.id) { mutableStateOf<Int?>(null) }
     var dragging by remember(video.id) { mutableStateOf(false) }
     var dragPosition by remember(video.id) { mutableLongStateOf(0L) }
 
@@ -841,6 +848,14 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
         onDispose { disposed = true; MediaController.releaseFuture(future) }
     }
 
+    LaunchedEffect(sleepMinutes, controller) {
+        val minutes = sleepMinutes ?: return@LaunchedEffect
+        delay(minutes * 60_000L)
+        controller?.pause()
+        playing = false
+        sleepMinutes = null
+    }
+
     LaunchedEffect(controller) {
         while (isActive) {
             controller?.let { player ->
@@ -884,6 +899,39 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
                 IconButton(enabled = pipEnabled, onClick = { activity.enterVortexPip() }) {
                     Icon(Icons.Default.PictureInPictureAlt, contentDescription = "Picture-in-Picture", tint = if (pipEnabled) Color.White else Muted)
                 }
+                Box {
+                    IconButton(onClick = { toolsExpanded = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Mais opções", tint = Color.White)
+                    }
+                    DropdownMenu(expanded = toolsExpanded, onDismissRequest = { toolsExpanded = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Ajustar ao ecrã") },
+                            onClick = { resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; toolsExpanded = false }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Preencher e cortar") },
+                            onClick = { resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM; toolsExpanded = false }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Esticar imagem") },
+                            onClick = { resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL; toolsExpanded = false }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (repeatOne) "Desativar repetição" else "Repetir este vídeo") },
+                            leadingIcon = { Icon(Icons.Default.RepeatOne, contentDescription = null) },
+                            onClick = {
+                                repeatOne = !repeatOne
+                                controller?.repeatMode = if (repeatOne) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+                                toolsExpanded = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text(if (sleepMinutes == null) "Temporizador para dormir" else "Temporizador: $sleepMinutes min") },
+                            leadingIcon = { Icon(Icons.Default.Timer, contentDescription = null) },
+                            onClick = { timerDialog = true; toolsExpanded = false }
+                        )
+                    }
+                }
             }
         }
         AndroidView(
@@ -893,9 +941,13 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
                     useController = false
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                     setBackgroundColor(android.graphics.Color.BLACK)
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                 }
             },
-            update = { it.player = controller }
+            update = {
+                it.player = controller
+                it.resizeMode = resizeMode
+            }
         )
         if (!activity.isInPipMode) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp)) {
@@ -913,6 +965,17 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
                 }
                 externalSubtitleName?.let {
                     Text("Legenda: $it", color = Color(0xFFBBA8FF), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                if (sleepMinutes != null || repeatOne || resizeMode != AspectRatioFrameLayout.RESIZE_MODE_FIT) {
+                    Text(
+                        listOfNotNull(
+                            if (repeatOne) "Repetir ativo" else null,
+                            sleepMinutes?.let { "Temporizador $it min" },
+                            if (resizeMode == AspectRatioFrameLayout.RESIZE_MODE_ZOOM) "Preencher" else if (resizeMode == AspectRatioFrameLayout.RESIZE_MODE_FILL) "Esticado" else null
+                        ).joinToString("  •  "),
+                        color = Color(0xFFBBA8FF),
+                        fontSize = 10.sp
+                    )
                 }
                 Spacer(Modifier.height(10.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
@@ -938,6 +1001,36 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
                 }
             }
         }
+    }
+
+    if (timerDialog) {
+        AlertDialog(
+            onDismissRequest = { timerDialog = false },
+            icon = { Icon(Icons.Default.Timer, contentDescription = null, tint = Purple) },
+            title = { Text("Temporizador para dormir") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("O Vortex pausa a reprodução automaticamente.", color = Muted, fontSize = 13.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf(15, 30, 45, 60).forEach { minutes ->
+                            OutlinedButton(
+                                onClick = { sleepMinutes = minutes; timerDialog = false },
+                                contentPadding = PaddingValues(horizontal = 9.dp, vertical = 6.dp)
+                            ) { Text("$minutes min", fontSize = 11.sp) }
+                        }
+                    }
+                    if (sleepMinutes != null) {
+                        TextButton(onClick = { sleepMinutes = null; timerDialog = false }) {
+                            Text("Cancelar temporizador", color = Color(0xFFD84B62))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { timerDialog = false }) { Text("Fechar") }
+            },
+            shape = RoundedCornerShape(24.dp)
+        )
     }
 }
 
