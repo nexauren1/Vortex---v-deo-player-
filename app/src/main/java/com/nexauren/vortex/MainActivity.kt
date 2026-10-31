@@ -1075,7 +1075,7 @@ private fun PlayerScreen(
         onDispose { controller?.removeListener(listener) }
     }
 
-    DisposableEffect(activity, backgroundPlayback) {
+    DisposableEffect(activity, backgroundPlayback, controller) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP && !backgroundPlayback && !activity.isInPipMode) {
                 controller?.pause()
