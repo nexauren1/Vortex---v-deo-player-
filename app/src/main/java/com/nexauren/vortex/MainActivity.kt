@@ -325,7 +325,7 @@ private fun HomeScreen(
         } else {
             val featured = videos.first()
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                SectionTitle("Continuar a assistir", "Abrir", { onOpen(featured) })
+                SectionTitle("Vídeo em destaque", "Abrir", { onOpen(featured) })
                 Card(Modifier.fillMaxWidth().clickable { onOpen(featured) }, shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF11162D))) {
                     Box {
                         VideoThumbnail(featured, Modifier.fillMaxWidth().height(190.dp))
