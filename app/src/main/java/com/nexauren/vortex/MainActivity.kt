@@ -420,6 +420,31 @@ private fun HomeScreen(
                 }
             }
         } else {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFF7F4FF))
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    VortexLogo(48.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("O teu cinema pessoal", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Ink)
+                        Text("Os teus vídeos, organizados num só lugar.", fontSize = 11.sp, color = Muted)
+                    }
+                    Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = Purple)
+                }
+            }
+            val folderCount = videos.map { it.folder }.distinct().size
+            val storageUsed = videos.sumOf { it.sizeBytes }
+            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                HomeStatCard("VÍDEOS", videos.size.toString(), Icons.Default.VideoLibrary, Modifier.weight(1f))
+                HomeStatCard("PASTAS", folderCount.toString(), Icons.Default.FolderOpen, Modifier.weight(1f))
+                HomeStatCard("OCUPADO", formatBytes(storageUsed), Icons.Default.Storage, Modifier.weight(1f))
+            }
             val featured = resumeVideo ?: videos.first()
             val isResume = resumeVideo != null && resumePosition > 0L && resumePosition < featured.durationMs
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -431,7 +456,7 @@ private fun HomeScreen(
                             Column {
                                 Text(if (isResume) "RETOMAR DE ONDE FICASTE" else "VÍDEO NO TEU DISPOSITIVO", fontSize = 9.sp, color = Color(0xFFBDA8FF), letterSpacing = 1.5.sp)
                                 Text(featured.title, fontSize = 17.sp, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text((if (isResume) formatDuration(resumePosition) + " restantes de " else "") + formatDuration(featured.durationMs) + "  •  " + featured.folder, fontSize = 11.sp, color = Color.White.copy(alpha = .8f))
+                                Text((if (isResume) "Retomar em " + formatDuration(resumePosition) + " / " else "") + formatDuration(featured.durationMs) + "  •  " + featured.folder, fontSize = 11.sp, color = Color.White.copy(alpha = .8f))
                             }
                         }
                         Box(Modifier.align(Alignment.Center).size(54.dp).clip(CircleShape).background(Purple), contentAlignment = Alignment.Center) {
@@ -475,6 +500,25 @@ private fun HomeScreen(
             }
         }
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun HomeStatCard(label: String, value: String, icon: ImageVector, modifier: Modifier) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(17.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF7F6FC))
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(vertical = 13.dp, horizontal = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Icon(icon, contentDescription = null, tint = Purple, modifier = Modifier.size(20.dp))
+            Text(value, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(label, fontSize = 9.sp, color = Muted, letterSpacing = 0.8.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }
 
