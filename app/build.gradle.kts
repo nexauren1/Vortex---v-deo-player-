@@ -1,5 +1,6 @@
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
@@ -32,6 +33,10 @@ android {
     }
 }
 
+
+kotlin {
+    jvmToolchain(17)
+}
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
