@@ -131,6 +131,7 @@ private fun VortexRoot(activity: MainActivity) {
     var selectedVideo by remember { mutableStateOf<LocalVideo?>(null) }
     var selectedFolder by remember { mutableStateOf<String?>(null) }
     var pipEnabled by remember { mutableStateOf(prefs.getBoolean("pip_enabled", true)) }
+    var historyRefresh by remember { mutableIntStateOf(0) }
     var favorites by remember { mutableStateOf(prefs.getStringSet("favorite_ids", emptySet())?.toSet() ?: emptySet()) }
 
     fun scan() {
@@ -148,6 +149,46 @@ private fun VortexRoot(activity: MainActivity) {
 
     fun requestAccess() { permissionLauncher.launch(videoPermissions()) }
 
+    val localVideoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            scope.launch {
+                val imported = withContext(Dispatchers.IO) {
+                    var title = "Vídeo local"
+                    var size = 0L
+                    var duration = 0L
+                    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                            if (nameIndex >= 0) title = cursor.getString(nameIndex) ?: title
+                            if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) size = cursor.getLong(sizeIndex)
+                        }
+                    }
+                    val retriever = MediaMetadataRetriever()
+                    try {
+                        retriever.setDataSource(context, uri)
+                        duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                    } catch (_: Exception) {
+                        duration = 0L
+                    } finally {
+                        retriever.release()
+                    }
+                    LocalVideo(
+                        id = uri.toString().hashCode().toLong(),
+                        title = title,
+                        uri = uri,
+                        durationMs = duration,
+                        sizeBytes = size,
+                        folder = "Ficheiros abertos",
+                        dateAddedSeconds = System.currentTimeMillis() / 1000L
+                    )
+                }
+                selectedVideo = imported
+            }
+        }
+    }
+
     LaunchedEffect(welcomeDone) {
         if (welcomeDone) {
             if (hasVideoPermission(context)) scan() else requestAccess()
@@ -160,6 +201,12 @@ private fun VortexRoot(activity: MainActivity) {
         prefs.edit().putStringSet("favorite_ids", favorites).apply()
     }
 
+    val resumeVideo = remember(videos, historyRefresh) {
+        val ids = prefs.getString("history_order", "").orEmpty().split("|").filter { it.isNotBlank() }
+        ids.firstNotNullOfOrNull { savedId -> videos.firstOrNull { it.id.toString() == savedId } }
+    }
+    val resumePosition = resumeVideo?.let { prefs.getLong("watch_pos_${it.id}", 0L) } ?: 0L
+
     BackHandler(enabled = selectedVideo != null) { selectedVideo = null }
 
     if (!welcomeDone) {
@@ -171,7 +218,10 @@ private fun VortexRoot(activity: MainActivity) {
     }
 
     selectedVideo?.let {
-        PlayerScreen(activity, it, pipEnabled) { selectedVideo = null }
+        PlayerScreen(activity, it, pipEnabled, prefs) {
+            selectedVideo = null
+            historyRefresh++
+        }
         return
     }
 
@@ -207,11 +257,13 @@ private fun VortexRoot(activity: MainActivity) {
             TopBar(
                 if (tab == Tab.LIBRARY && selectedFolder != null) selectedFolder!! else tab.title,
                 onSearch = { tab = Tab.LIBRARY },
-                onRefresh = { if (hasVideoPermission(context)) scan() else requestAccess() }
+                onRefresh = { if (hasVideoPermission(context)) scan() else requestAccess() },
+                onOpenFile = { localVideoPicker.launch(arrayOf("video/*")) }
             )
             when (tab) {
-                Tab.HOME -> HomeScreen(videos, scanning, permission,
+                Tab.HOME -> HomeScreen(videos, scanning, permission, resumeVideo, resumePosition,
                     onRefresh = { if (hasVideoPermission(context)) scan() else requestAccess() },
+                    onOpenFile = { localVideoPicker.launch(arrayOf("video/*")) },
                     onOpen = { selectedVideo = it }, onNavigate = { tab = it })
                 Tab.LIBRARY -> LibraryScreen(
                     videos.filter { selectedFolder == null || it.folder == selectedFolder }, favorites,
@@ -298,12 +350,13 @@ private fun WelcomeScreen(onStart: () -> Unit) {
 }
 
 @Composable
-private fun TopBar(title: String, onSearch: () -> Unit, onRefresh: () -> Unit) {
+private fun TopBar(title: String, onSearch: () -> Unit, onRefresh: () -> Unit, onOpenFile: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 12.dp, bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, fontSize = 25.sp, fontWeight = FontWeight.Bold, color = Ink)
             Text("VORTEX  •  VIDEO PLAYER", fontSize = 9.sp, letterSpacing = 1.6.sp, color = Muted)
         }
+        IconButton(onClick = onOpenFile) { Icon(Icons.Default.VideoFile, contentDescription = "Abrir ficheiro de vídeo", tint = Purple) }
         IconButton(onClick = onSearch) { Icon(Icons.Default.Search, contentDescription = "Pesquisar", tint = Ink) }
         IconButton(onClick = onRefresh) { Icon(Icons.Default.Refresh, contentDescription = "Atualizar", tint = Ink) }
     }
@@ -312,7 +365,8 @@ private fun TopBar(title: String, onSearch: () -> Unit, onRefresh: () -> Unit) {
 @Composable
 private fun HomeScreen(
     videos: List<LocalVideo>, scanning: Boolean, permission: Boolean,
-    onRefresh: () -> Unit, onOpen: (LocalVideo) -> Unit, onNavigate: (Tab) -> Unit
+    resumeVideo: LocalVideo?, resumePosition: Long,
+    onRefresh: () -> Unit, onOpenFile: () -> Unit, onOpen: (LocalVideo) -> Unit, onNavigate: (Tab) -> Unit
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         if (videos.isEmpty()) {
@@ -326,26 +380,42 @@ private fun HomeScreen(
                     Button(onClick = onRefresh, colors = ButtonDefaults.buttonColors(containerColor = Purple)) {
                         Text(if (!permission) "Permitir acesso" else "Procurar novamente")
                     }
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedButton(onClick = onOpenFile, shape = RoundedCornerShape(14.dp)) {
+                        Icon(Icons.Default.FolderOpen, contentDescription = null)
+                        Spacer(Modifier.width(7.dp))
+                        Text("Abrir vídeo do dispositivo")
+                    }
                 }
             }
         } else {
-            val featured = videos.first()
+            val featured = resumeVideo ?: videos.first()
+            val isResume = resumeVideo != null && resumePosition > 0L && resumePosition < featured.durationMs
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                SectionTitle("Vídeo em destaque", "Abrir", { onOpen(featured) })
+                SectionTitle(if (isResume) "Continuar a assistir" else "Vídeo em destaque", "Abrir", { onOpen(featured) })
                 Card(Modifier.fillMaxWidth().clickable { onOpen(featured) }, shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF11162D))) {
                     Box {
                         VideoThumbnail(featured, Modifier.fillMaxWidth().height(190.dp))
                         Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE6000015)))).padding(16.dp)) {
                             Column {
-                                Text("VÍDEO NO TEU DISPOSITIVO", fontSize = 9.sp, color = Color(0xFFBDA8FF), letterSpacing = 1.5.sp)
+                                Text(if (isResume) "RETOMAR DE ONDE FICASTE" else "VÍDEO NO TEU DISPOSITIVO", fontSize = 9.sp, color = Color(0xFFBDA8FF), letterSpacing = 1.5.sp)
                                 Text(featured.title, fontSize = 17.sp, color = Color.White, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(formatDuration(featured.durationMs) + "  •  " + featured.folder, fontSize = 11.sp, color = Color.White.copy(alpha = .8f))
+                                Text((if (isResume) formatDuration(resumePosition) + " restantes de " else "") + formatDuration(featured.durationMs) + "  •  " + featured.folder, fontSize = 11.sp, color = Color.White.copy(alpha = .8f))
                             }
                         }
                         Box(Modifier.align(Alignment.Center).size(54.dp).clip(CircleShape).background(Purple), contentAlignment = Alignment.Center) {
                             Icon(Icons.Default.PlayArrow, contentDescription = "Reproduzir", tint = Color.White, modifier = Modifier.size(36.dp))
                         }
                     }
+                }
+                if (isResume) {
+                    val progress = (resumePosition.toFloat() / featured.durationMs.coerceAtLeast(1L).toFloat()).coerceIn(0f, 1f)
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).height(5.dp),
+                        color = Purple,
+                        trackColor = Color(0xFFE9E5F5)
+                    )
                 }
             }
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -570,7 +640,7 @@ private fun VideoThumbnail(video: LocalVideo, modifier: Modifier = Modifier) {
 
 @OptIn(UnstableApi::class)
 @Composable
-private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: Boolean, onBack: () -> Unit) {
+private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: Boolean, prefs: android.content.SharedPreferences, onBack: () -> Unit) {
     val context = LocalContext.current
     var controller by remember(video.id) { mutableStateOf<MediaController?>(null) }
     var position by remember(video.id) { mutableLongStateOf(0L) }
@@ -642,6 +712,8 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
                     .setMediaMetadata(metadata)
                     .build()
                 connected.setMediaItem(mediaItem)
+                val resumeAt = prefs.getLong("watch_pos_${video.id}", 0L).coerceIn(0L, video.durationMs.coerceAtLeast(0L))
+                if (resumeAt > 2_000L && resumeAt < video.durationMs - 3_000L) connected.seekTo(resumeAt)
                 connected.prepare()
                 connected.playWhenReady = true
             }
@@ -655,8 +727,19 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
                 position = player.currentPosition.coerceAtLeast(0L)
                 if (player.duration > 0L && player.duration != C.TIME_UNSET) duration = player.duration
                 playing = player.isPlaying
+                val savedPosition = if (duration > 0L && player.currentPosition >= duration - 2_000L) 0L else player.currentPosition.coerceAtLeast(0L)
+                saveWatchProgress(prefs, video, savedPosition, duration)
             }
-            delay(350)
+            delay(2_000)
+        }
+    }
+
+    DisposableEffect(controller) {
+        onDispose {
+            controller?.let { player ->
+                val savedPosition = if (duration > 0L && player.currentPosition >= duration - 2_000L) 0L else player.currentPosition.coerceAtLeast(0L)
+                saveWatchProgress(prefs, video, savedPosition, duration)
+            }
         }
     }
 
@@ -752,4 +835,24 @@ private fun formatBytes(bytes: Long): String = when {
     bytes < 1024L * 1024L -> String.format(Locale.getDefault(), "%.1f KB", bytes / 1024.0)
     bytes < 1024L * 1024L * 1024L -> String.format(Locale.getDefault(), "%.1f MB", bytes / 1024.0 / 1024.0)
     else -> String.format(Locale.getDefault(), "%.1f GB", bytes / 1024.0 / 1024.0 / 1024.0)
+}
+
+
+private fun saveWatchProgress(
+    prefs: android.content.SharedPreferences,
+    video: LocalVideo,
+    positionMs: Long,
+    durationMs: Long
+) {
+    val id = video.id.toString()
+    val order = prefs.getString("history_order", "").orEmpty()
+        .split("|")
+        .filter { it.isNotBlank() && it != id }
+        .toMutableList()
+    order.add(0, id)
+    prefs.edit()
+        .putLong("watch_pos_$id", positionMs.coerceAtLeast(0L))
+        .putLong("watch_duration_$id", durationMs.coerceAtLeast(0L))
+        .putString("history_order", order.take(30).joinToString("|"))
+        .apply()
 }
