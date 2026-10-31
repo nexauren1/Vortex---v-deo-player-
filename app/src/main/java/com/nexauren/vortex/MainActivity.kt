@@ -469,31 +469,117 @@ private fun ExploreTile(label: String, icon: ImageVector, modifier: Modifier, on
 @Composable
 private fun LibraryScreen(videos: List<LocalVideo>, favorites: Set<String>, onOpen: (LocalVideo) -> Unit, onFavorite: (LocalVideo) -> Unit) {
     var query by remember { mutableStateOf("") }
-    val filtered = videos.filter { it.title.contains(query, ignoreCase = true) }
+    var selectedFilter by remember { mutableStateOf("Todos") }
+    var sortBy by remember { mutableStateOf("Recentes") }
+    var sortExpanded by remember { mutableStateOf(false) }
+    var detailsVideo by remember { mutableStateOf<LocalVideo?>(null) }
+
+    val filtered = videos.filter { video ->
+        val matchesQuery = video.title.contains(query, ignoreCase = true) || video.folder.contains(query, ignoreCase = true)
+        val matchesFilter = when (selectedFilter) {
+            "Favoritos" -> video.id.toString() in favorites
+            "Curtos" -> video.durationMs in 1L..600_000L
+            "Longos" -> video.durationMs >= 1_200_000L
+            "Recentes" -> video.dateAddedSeconds >= (System.currentTimeMillis() / 1000L) - 7L * 24L * 60L * 60L
+            else -> true
+        }
+        matchesQuery && matchesFilter
+    }
+    val sorted = when (sortBy) {
+        "Nome A–Z" -> filtered.sortedBy { it.title.lowercase(Locale.getDefault()) }
+        "Maior duração" -> filtered.sortedByDescending { it.durationMs }
+        "Maior tamanho" -> filtered.sortedByDescending { it.sizeBytes }
+        else -> filtered.sortedByDescending { it.dateAddedSeconds }
+    }
+
     Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         OutlinedTextField(
             query, { query = it }, modifier = Modifier.fillMaxWidth(), singleLine = true,
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-            placeholder = { Text("Pesquisar vídeos") }, shape = RoundedCornerShape(16.dp)
+            trailingIcon = {
+                if (query.isNotEmpty()) IconButton(onClick = { query = "" }) {
+                    Icon(Icons.Default.Close, contentDescription = "Limpar pesquisa")
+                }
+            },
+            placeholder = { Text("Pesquisar vídeos ou pastas") }, shape = RoundedCornerShape(16.dp)
         )
         Spacer(Modifier.height(10.dp))
-        Text(filtered.size.toString() + " vídeos", color = Muted, fontSize = 12.sp)
-        Spacer(Modifier.height(8.dp))
-        if (filtered.isEmpty()) {
-            EmptyState("Nenhum vídeo encontrado", "Os vídeos locais disponíveis aparecerão aqui.", Icons.Default.VideoLibrary)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            items(listOf("Todos", "Recentes", "Favoritos", "Curtos", "Longos")) { filter ->
+                FilterChip(
+                    selected = selectedFilter == filter,
+                    onClick = { selectedFilter = filter },
+                    label = { Text(filter, fontSize = 11.sp) },
+                    leadingIcon = if (selectedFilter == filter) {
+                        { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(15.dp)) }
+                    } else null,
+                    shape = RoundedCornerShape(12.dp)
+                )
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 5.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(sorted.size.toString() + " de " + videos.size + " vídeos", color = Muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
+            Box {
+                TextButton(onClick = { sortExpanded = true }, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)) {
+                    Icon(Icons.Default.Sort, contentDescription = null, tint = Purple, modifier = Modifier.size(17.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text(sortBy, color = Purple, fontSize = 11.sp)
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = Purple)
+                }
+                DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }) {
+                    listOf("Recentes", "Nome A–Z", "Maior duração", "Maior tamanho").forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(option) },
+                            onClick = { sortBy = option; sortExpanded = false },
+                            leadingIcon = if (sortBy == option) ({ Icon(Icons.Default.Check, contentDescription = null, tint = Purple) }) else null
+                        )
+                    }
+                }
+            }
+        }
+        if (sorted.isEmpty()) {
+            Column(Modifier.fillMaxWidth().weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                EmptyState(
+                    if (videos.isEmpty()) "Biblioteca vazia" else "Nenhum resultado",
+                    if (videos.isEmpty()) "Procura vídeos no dispositivo ou abre um ficheiro diretamente." else "Experimenta remover os filtros ou alterar a pesquisa.",
+                    Icons.Default.VideoLibrary
+                )
+                if (query.isNotEmpty() || selectedFilter != "Todos") {
+                    TextButton(onClick = { query = ""; selectedFilter = "Todos" }) { Text("Limpar filtros", color = Purple) }
+                }
+            }
         } else {
             LazyVerticalGrid(
-                columns = GridCells.Fixed(2), modifier = Modifier.fillMaxSize(),
+                columns = GridCells.Adaptive(minSize = 148.dp),
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 18.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(16.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                items(filtered, key = { it.id }) { video ->
+                items(sorted, key = { it.id }) { video ->
                     Column {
                         Box {
-                            VideoThumbnail(video, Modifier.fillMaxWidth().aspectRatio(1.42f).clip(RoundedCornerShape(15.dp)).clickable { onOpen(video) })
-                            Text(formatDuration(video.durationMs), Modifier.align(Alignment.BottomEnd).padding(6.dp).clip(RoundedCornerShape(5.dp)).background(Color(0xC9000010)).padding(horizontal = 5.dp, vertical = 2.dp), color = Color.White, fontSize = 9.sp)
-                            IconButton(onClick = { onFavorite(video) }, modifier = Modifier.align(Alignment.TopEnd)) {
-                                Icon(if (video.id.toString() in favorites) Icons.Default.Favorite else Icons.Default.FavoriteBorder, contentDescription = "Favorito", tint = if (video.id.toString() in favorites) Color(0xFFFF4D85) else Color.White)
+                            VideoThumbnail(
+                                video,
+                                Modifier.fillMaxWidth().aspectRatio(1.42f).clip(RoundedCornerShape(15.dp)).clickable { onOpen(video) }
+                            )
+                            Text(
+                                formatDuration(video.durationMs),
+                                Modifier.align(Alignment.BottomEnd).padding(6.dp).clip(RoundedCornerShape(5.dp))
+                                    .background(Color(0xC9000010)).padding(horizontal = 5.dp, vertical = 2.dp),
+                                color = Color.White, fontSize = 9.sp
+                            )
+                            Row(Modifier.align(Alignment.TopEnd)) {
+                                IconButton(onClick = { detailsVideo = video }) {
+                                    Icon(Icons.Default.Info, contentDescription = "Detalhes do vídeo", tint = Color.White)
+                                }
+                                IconButton(onClick = { onFavorite(video) }) {
+                                    Icon(
+                                        if (video.id.toString() in favorites) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                        contentDescription = "Favorito",
+                                        tint = if (video.id.toString() in favorites) Color(0xFFFF4D85) else Color.White
+                                    )
+                                }
                             }
                         }
                         Spacer(Modifier.height(7.dp))
@@ -503,6 +589,40 @@ private fun LibraryScreen(videos: List<LocalVideo>, favorites: Set<String>, onOp
                 }
             }
         }
+    }
+
+    detailsVideo?.let { video ->
+        AlertDialog(
+            onDismissRequest = { detailsVideo = null },
+            icon = { Icon(Icons.Default.Movie, contentDescription = null, tint = Purple) },
+            title = { Text(video.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DetailLine("Pasta", video.folder)
+                    DetailLine("Duração", formatDuration(video.durationMs))
+                    DetailLine("Tamanho", formatBytes(video.sizeBytes))
+                    DetailLine("Origem", "Armazenamento local")
+                    DetailLine("Identificador", video.id.toString())
+                }
+            },
+            confirmButton = {
+                Button(onClick = { detailsVideo = null; onOpen(video) }, colors = ButtonDefaults.buttonColors(containerColor = Purple)) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null)
+                    Spacer(Modifier.width(5.dp))
+                    Text("Reproduzir")
+                }
+            },
+            dismissButton = { TextButton(onClick = { detailsVideo = null }) { Text("Fechar") } },
+            shape = RoundedCornerShape(24.dp)
+        )
+    }
+}
+
+@Composable
+private fun DetailLine(label: String, value: String) {
+    Row(verticalAlignment = Alignment.Top) {
+        Text(label, color = Muted, fontSize = 12.sp, modifier = Modifier.width(86.dp))
+        Text(value, color = Ink, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
     }
 }
 
