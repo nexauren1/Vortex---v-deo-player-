@@ -55,6 +55,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.C
 import androidx.media3.cast.MediaRouteButton
 import androidx.media3.common.util.UnstableApi
@@ -136,6 +138,8 @@ private fun VortexRoot(activity: MainActivity) {
     var selectedFolder by remember { mutableStateOf<String?>(null) }
     var pipEnabled by remember { mutableStateOf(prefs.getBoolean("pip_enabled", true)) }
     var autoPlayNext by remember { mutableStateOf(prefs.getBoolean("auto_play_next", true)) }
+    var backgroundPlayback by remember { mutableStateOf(prefs.getBoolean("background_playback", true)) }
+    var keepScreenOn by remember { mutableStateOf(prefs.getBoolean("keep_screen_on", true)) }
     var historyRefresh by remember { mutableIntStateOf(0) }
     var favorites by remember { mutableStateOf(prefs.getStringSet("favorite_ids", emptySet())?.toSet() ?: emptySet()) }
 
@@ -224,7 +228,10 @@ private fun VortexRoot(activity: MainActivity) {
     }
     val resumePosition = resumeVideo?.let { prefs.getLong("watch_pos_${it.id}", 0L) } ?: 0L
 
-    BackHandler(enabled = selectedVideo != null) { selectedVideo = null }
+    BackHandler(enabled = selectedVideo != null) {
+        selectedVideo = null
+        historyRefresh++
+    }
 
     if (!welcomeDone) {
         WelcomeScreen {
@@ -240,6 +247,8 @@ private fun VortexRoot(activity: MainActivity) {
             video = it,
             pipEnabled = pipEnabled,
             autoPlayNext = autoPlayNext,
+            backgroundPlayback = backgroundPlayback,
+            keepScreenOn = keepScreenOn,
             prefs = prefs,
             onPrevious = { moveInLibrary(-1) },
             onNext = { moveInLibrary(1) },
@@ -308,6 +317,23 @@ private fun VortexRoot(activity: MainActivity) {
                     onAutoPlayNextChange = {
                         autoPlayNext = it
                         prefs.edit().putBoolean("auto_play_next", it).apply()
+                    },
+                    backgroundPlayback = backgroundPlayback,
+                    onBackgroundPlaybackChange = {
+                        backgroundPlayback = it
+                        prefs.edit().putBoolean("background_playback", it).apply()
+                    },
+                    keepScreenOn = keepScreenOn,
+                    onKeepScreenOnChange = {
+                        keepScreenOn = it
+                        prefs.edit().putBoolean("keep_screen_on", it).apply()
+                    },
+                    onClearHistory = {
+                        prefs.getString("history_order", "").orEmpty().split("|").filter { it.isNotBlank() }.forEach { id ->
+                            prefs.edit().remove("watch_pos_$id").remove("watch_duration_$id").apply()
+                        }
+                        prefs.edit().remove("history_order").apply()
+                        historyRefresh++
                     },
                     onRescan = { if (hasVideoPermission(context)) scan() else requestAccess() }
                 )
@@ -748,18 +774,25 @@ private fun SettingsScreen(
     onPipChange: (Boolean) -> Unit,
     autoPlayNext: Boolean,
     onAutoPlayNextChange: (Boolean) -> Unit,
+    backgroundPlayback: Boolean,
+    onBackgroundPlaybackChange: (Boolean) -> Unit,
+    keepScreenOn: Boolean,
+    onKeepScreenOnChange: (Boolean) -> Unit,
+    onClearHistory: () -> Unit,
     onRescan: () -> Unit
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
         SettingsHeading("Reprodução")
         SettingSwitch(Icons.Default.PictureInPictureAlt, "Picture-in-Picture", "Continuar a ver enquanto utilizas outras aplicações", pipEnabled, onPipChange)
         SettingSwitch(Icons.Default.SkipNext, "Reprodução automática", "Passar para o próximo vídeo ao terminar", autoPlayNext, onAutoPlayNextChange)
-        SettingRow(Icons.Default.VolumeUp, "Reprodução em segundo plano", "Sessão multimédia preparada para continuar fora do ecrã")
+        SettingSwitch(Icons.Default.Headphones, "Áudio em segundo plano", "Continuar a reprodução ao sair do Vortex", backgroundPlayback, onBackgroundPlaybackChange)
+        SettingSwitch(Icons.Default.WbSunny, "Manter ecrã ligado", "Evitar que o ecrã desligue durante o vídeo", keepScreenOn, onKeepScreenOnChange)
         SettingRow(Icons.Default.Subtitles, "Legendas", "Faixas incorporadas e controlos no player")
         SettingRow(Icons.Default.Speed, "Velocidade de reprodução", "Controlos de velocidade no player")
         HorizontalDivider(color = Color(0xFFECECF2))
         SettingsHeading("Biblioteca")
         SettingRow(Icons.Default.Refresh, "Atualizar biblioteca", "Voltar a procurar vídeos neste dispositivo", onRescan)
+        SettingRow(Icons.Default.History, "Limpar histórico", "Apagar posições de retoma guardadas", onClearHistory)
         SettingRow(Icons.Default.Lock, "Privacidade", "Os vídeos permanecem no teu dispositivo")
         SettingRow(Icons.Default.Cast, "Chromecast", "Base Media3 Cast incluída; ligação ao recetor na próxima etapa")
         HorizontalDivider(color = Color(0xFFECECF2))
@@ -847,6 +880,8 @@ private fun PlayerScreen(
     video: LocalVideo,
     pipEnabled: Boolean,
     autoPlayNext: Boolean,
+    backgroundPlayback: Boolean,
+    keepScreenOn: Boolean,
     prefs: android.content.SharedPreferences,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -967,6 +1002,23 @@ private fun PlayerScreen(
         }
         controller?.addListener(listener)
         onDispose { controller?.removeListener(listener) }
+    }
+
+    DisposableEffect(activity, backgroundPlayback) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP && !backgroundPlayback && !activity.isInPipMode) {
+                controller?.pause()
+                playing = false
+            }
+        }
+        activity.lifecycle.addObserver(observer)
+        onDispose { activity.lifecycle.removeObserver(observer) }
+    }
+
+    DisposableEffect(activity, keepScreenOn) {
+        if (keepScreenOn) activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else activity.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose { activity.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
     }
 
     DisposableEffect(controller) {
