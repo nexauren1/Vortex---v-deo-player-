@@ -227,6 +227,13 @@ private fun VortexRoot(activity: MainActivity) {
         ids.firstNotNullOfOrNull { savedId -> videos.firstOrNull { it.id.toString() == savedId } }
     }
     val resumePosition = resumeVideo?.let { prefs.getLong("watch_pos_${it.id}", 0L) } ?: 0L
+    val recentlyWatched = remember(videos, historyRefresh) {
+        prefs.getString("history_order", "").orEmpty().split("|")
+            .filter { it.isNotBlank() }
+            .mapNotNull { savedId -> videos.firstOrNull { it.id.toString() == savedId } }
+            .distinctBy { it.id }
+            .take(8)
+    }
 
     BackHandler(enabled = selectedVideo != null) {
         selectedVideo = null
@@ -296,7 +303,7 @@ private fun VortexRoot(activity: MainActivity) {
                 onOpenFile = { localVideoPicker.launch(arrayOf("video/*")) }
             )
             when (tab) {
-                Tab.HOME -> HomeScreen(videos, scanning, permission, resumeVideo, resumePosition,
+                Tab.HOME -> HomeScreen(videos, scanning, permission, resumeVideo, resumePosition, recentlyWatched,
                     onRefresh = { if (hasVideoPermission(context)) scan() else requestAccess() },
                     onOpenFile = { localVideoPicker.launch(arrayOf("video/*")) },
                     onOpen = { selectedVideo = it }, onNavigate = { tab = it })
@@ -422,7 +429,7 @@ private fun TopBar(title: String, onSearch: () -> Unit, onRefresh: () -> Unit, o
 @Composable
 private fun HomeScreen(
     videos: List<LocalVideo>, scanning: Boolean, permission: Boolean,
-    resumeVideo: LocalVideo?, resumePosition: Long,
+    resumeVideo: LocalVideo?, resumePosition: Long, recentlyWatched: List<LocalVideo>,
     onRefresh: () -> Unit, onOpenFile: () -> Unit, onOpen: (LocalVideo) -> Unit, onNavigate: (Tab) -> Unit
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
@@ -516,6 +523,16 @@ private fun HomeScreen(
                     }
                 }
             }
+            if (recentlyWatched.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SectionTitle("Vistos recentemente", null, null)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(recentlyWatched, key = { "watched_${it.id}" }) { video ->
+                            RecentWatchCard(video = video, onClick = { onOpen(video) })
+                        }
+                    }
+                }
+            }
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SectionTitle("Explorar", null, null)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -526,6 +543,26 @@ private fun HomeScreen(
             }
         }
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun RecentWatchCard(video: LocalVideo, onClick: () -> Unit) {
+    Column(
+        Modifier.width(132.dp).clickable(onClick = onClick),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box {
+            VideoThumbnail(video, Modifier.fillMaxWidth().height(82.dp).clip(RoundedCornerShape(13.dp)))
+            Text(
+                formatDuration(video.durationMs),
+                Modifier.align(Alignment.BottomEnd).padding(5.dp).clip(RoundedCornerShape(5.dp))
+                    .background(Color(0xC9000010)).padding(horizontal = 5.dp, vertical = 2.dp),
+                color = Color.White, fontSize = 8.sp, fontWeight = FontWeight.Bold
+            )
+        }
+        Text(video.title, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("Visto recentemente", color = Purple, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
