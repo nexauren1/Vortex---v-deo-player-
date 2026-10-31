@@ -1182,15 +1182,11 @@ private fun PlayerScreen(
                 }
                 Spacer(Modifier.height(10.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = {
-                        speed = when (speed) { 0.75f -> 1f; 1f -> 1.25f; 1.25f -> 1.5f; 1.5f -> 2f; else -> 0.75f }
-                        controller?.setPlaybackSpeed(speed)
-                    }) { Text(speed.toString() + "x", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
                     IconButton(onClick = onPrevious) {
                         Icon(Icons.Default.SkipPrevious, contentDescription = "Vídeo anterior", tint = Color.White)
                     }
                     IconButton(onClick = { controller?.seekTo((position - 10_000L).coerceAtLeast(0L)) }) {
-                        Icon(Icons.Default.FastRewind, contentDescription = "Retroceder", tint = Color.White)
+                        Icon(Icons.Default.Replay10, contentDescription = "Retroceder 10 segundos", tint = Color.White)
                     }
                     Box(Modifier.size(58.dp).clip(CircleShape).background(Purple).clickable {
                         if (playing) controller?.pause() else controller?.play()
@@ -1199,11 +1195,26 @@ private fun PlayerScreen(
                         Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play/Pause", tint = Color.White, modifier = Modifier.size(34.dp))
                     }
                     IconButton(onClick = { controller?.seekTo((position + 10_000L).coerceAtMost(duration)) }) {
-                        Icon(Icons.Default.FastForward, contentDescription = "Avançar", tint = Color.White)
+                        Icon(Icons.Default.Forward10, contentDescription = "Avançar 10 segundos", tint = Color.White)
                     }
                     IconButton(onClick = onNext) {
                         Icon(Icons.Default.SkipNext, contentDescription = "Próximo vídeo", tint = Color.White)
                     }
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = {
+                        speed = when (speed) { 0.75f -> 1f; 1f -> 1.25f; 1.25f -> 1.5f; 1.5f -> 2f; else -> 0.75f }
+                        controller?.setPlaybackSpeed(speed)
+                    }) {
+                        Icon(Icons.Default.Speed, contentDescription = null, tint = Color(0xFFBBA8FF), modifier = Modifier.size(17.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text(speed.toString() + "x", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.width(20.dp))
                     IconButton(enabled = pipEnabled, onClick = { activity.enterVortexPip() }) {
                         Icon(Icons.Default.PictureInPictureAlt, contentDescription = "Picture-in-Picture", tint = if (pipEnabled) Color.White else Muted)
                     }
