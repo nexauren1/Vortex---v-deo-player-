@@ -59,6 +59,7 @@ import androidx.media3.common.C
 import androidx.media3.cast.MediaRouteButton
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -602,8 +603,14 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
             controller?.let { player ->
                 val resumeAt = player.currentPosition
                 val wasPlaying = player.isPlaying
+                val metadata = MediaMetadata.Builder()
+                    .setTitle(video.title)
+                    .setArtist("Vortex – Video Player")
+                    .setMediaType(MediaMetadata.MEDIA_TYPE_VIDEO)
+                    .build()
                 val item = MediaItem.Builder()
                     .setUri(video.uri)
+                    .setMediaMetadata(metadata)
                     .setSubtitleConfigurations(listOf(subtitle))
                     .build()
                 player.setMediaItem(item)
@@ -625,7 +632,16 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
             val connected = runCatching { future.get() }.getOrNull()
             if (!disposed && connected != null) {
                 controller = connected
-                connected.setMediaItem(MediaItem.fromUri(video.uri))
+                val metadata = MediaMetadata.Builder()
+                    .setTitle(video.title)
+                    .setArtist("Vortex – Video Player")
+                    .setMediaType(MediaMetadata.MEDIA_TYPE_VIDEO)
+                    .build()
+                val mediaItem = MediaItem.Builder()
+                    .setUri(video.uri)
+                    .setMediaMetadata(metadata)
+                    .build()
+                connected.setMediaItem(mediaItem)
                 connected.prepare()
                 connected.playWhenReady = true
             }
