@@ -56,6 +56,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.media3.common.C
+import androidx.media3.cast.MediaRouteButton
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.session.MediaController
@@ -565,6 +567,7 @@ private fun VideoThumbnail(video: LocalVideo, modifier: Modifier = Modifier) {
     }
 }
 
+@OptIn(UnstableApi::class)
 @Composable
 private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: Boolean, onBack: () -> Unit) {
     val context = LocalContext.current
@@ -655,6 +658,7 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
                         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !subtitles).build()
                     }
                 }) { Icon(Icons.Default.Subtitles, contentDescription = "Ativar ou desativar legendas", tint = if (subtitles) Color.White else Muted) }
+                MediaRouteButton(modifier = Modifier.size(42.dp))
                 IconButton(onClick = { subtitlePicker.launch(arrayOf("application/x-subrip", "text/vtt", "text/plain")) }) {
                     Icon(Icons.Default.Add, contentDescription = "Adicionar ficheiro de legendas", tint = Color.White)
                 }
