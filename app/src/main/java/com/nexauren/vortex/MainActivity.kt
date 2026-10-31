@@ -135,6 +135,7 @@ private fun VortexRoot(activity: MainActivity) {
     var selectedVideo by remember { mutableStateOf<LocalVideo?>(null) }
     var selectedFolder by remember { mutableStateOf<String?>(null) }
     var pipEnabled by remember { mutableStateOf(prefs.getBoolean("pip_enabled", true)) }
+    var autoPlayNext by remember { mutableStateOf(prefs.getBoolean("auto_play_next", true)) }
     var historyRefresh by remember { mutableIntStateOf(0) }
     var favorites by remember { mutableStateOf(prefs.getStringSet("favorite_ids", emptySet())?.toSet() ?: emptySet()) }
 
@@ -205,6 +206,18 @@ private fun VortexRoot(activity: MainActivity) {
         prefs.edit().putStringSet("favorite_ids", favorites).apply()
     }
 
+    fun moveInLibrary(step: Int) {
+        val current = selectedVideo ?: return
+        val index = videos.indexOfFirst { it.id == current.id }
+        val nextIndex = if (index < 0) {
+            if (step > 0) 0 else -1
+        } else {
+            index + step
+        }
+        if (nextIndex in videos.indices) selectedVideo = videos[nextIndex]
+        else if (step > 0 && autoPlayNext) selectedVideo = null
+    }
+
     val resumeVideo = remember(videos, historyRefresh) {
         val ids = prefs.getString("history_order", "").orEmpty().split("|").filter { it.isNotBlank() }
         ids.firstNotNullOfOrNull { savedId -> videos.firstOrNull { it.id.toString() == savedId } }
@@ -222,10 +235,19 @@ private fun VortexRoot(activity: MainActivity) {
     }
 
     selectedVideo?.let {
-        PlayerScreen(activity, it, pipEnabled, prefs) {
-            selectedVideo = null
-            historyRefresh++
-        }
+        PlayerScreen(
+            activity = activity,
+            video = it,
+            pipEnabled = pipEnabled,
+            autoPlayNext = autoPlayNext,
+            prefs = prefs,
+            onPrevious = { moveInLibrary(-1) },
+            onNext = { moveInLibrary(1) },
+            onBack = {
+                selectedVideo = null
+                historyRefresh++
+            }
+        )
         return
     }
 
@@ -281,6 +303,11 @@ private fun VortexRoot(activity: MainActivity) {
                     onPipChange = {
                         pipEnabled = it
                         prefs.edit().putBoolean("pip_enabled", it).apply()
+                    },
+                    autoPlayNext = autoPlayNext,
+                    onAutoPlayNextChange = {
+                        autoPlayNext = it
+                        prefs.edit().putBoolean("auto_play_next", it).apply()
                     },
                     onRescan = { if (hasVideoPermission(context)) scan() else requestAccess() }
                 )
@@ -672,10 +699,17 @@ private fun FavoritesScreen(videos: List<LocalVideo>, onOpen: (LocalVideo) -> Un
 }
 
 @Composable
-private fun SettingsScreen(pipEnabled: Boolean, onPipChange: (Boolean) -> Unit, onRescan: () -> Unit) {
+private fun SettingsScreen(
+    pipEnabled: Boolean,
+    onPipChange: (Boolean) -> Unit,
+    autoPlayNext: Boolean,
+    onAutoPlayNextChange: (Boolean) -> Unit,
+    onRescan: () -> Unit
+) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
         SettingsHeading("Reprodução")
         SettingSwitch(Icons.Default.PictureInPictureAlt, "Picture-in-Picture", "Continuar a ver enquanto utilizas outras aplicações", pipEnabled, onPipChange)
+        SettingSwitch(Icons.Default.SkipNext, "Reprodução automática", "Passar para o próximo vídeo ao terminar", autoPlayNext, onAutoPlayNextChange)
         SettingRow(Icons.Default.VolumeUp, "Reprodução em segundo plano", "Sessão multimédia preparada para continuar fora do ecrã")
         SettingRow(Icons.Default.Subtitles, "Legendas", "Faixas incorporadas e controlos no player")
         SettingRow(Icons.Default.Speed, "Velocidade de reprodução", "Controlos de velocidade no player")
@@ -764,7 +798,16 @@ private fun VideoThumbnail(video: LocalVideo, modifier: Modifier = Modifier) {
 
 @OptIn(UnstableApi::class)
 @Composable
-private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: Boolean, prefs: android.content.SharedPreferences, onBack: () -> Unit) {
+private fun PlayerScreen(
+    activity: MainActivity,
+    video: LocalVideo,
+    pipEnabled: Boolean,
+    autoPlayNext: Boolean,
+    prefs: android.content.SharedPreferences,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onBack: () -> Unit
+) {
     val context = LocalContext.current
     var controller by remember(video.id) { mutableStateOf<MediaController?>(null) }
     var position by remember(video.id) { mutableLongStateOf(0L) }
@@ -870,6 +913,16 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
             }
             delay(2_000)
         }
+    }
+
+    DisposableEffect(controller, autoPlayNext, onNext) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (autoPlayNext && playbackState == Player.STATE_ENDED) onNext()
+            }
+        }
+        controller?.addListener(listener)
+        onDispose { controller?.removeListener(listener) }
     }
 
     DisposableEffect(controller) {
@@ -1037,6 +1090,9 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
                         speed = when (speed) { 0.75f -> 1f; 1f -> 1.25f; 1.25f -> 1.5f; 1.5f -> 2f; else -> 0.75f }
                         controller?.setPlaybackSpeed(speed)
                     }) { Text(speed.toString() + "x", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold) }
+                    IconButton(onClick = onPrevious) {
+                        Icon(Icons.Default.SkipPrevious, contentDescription = "Vídeo anterior", tint = Color.White)
+                    }
                     IconButton(onClick = { controller?.seekTo((position - 10_000L).coerceAtLeast(0L)) }) {
                         Icon(Icons.Default.FastRewind, contentDescription = "Retroceder", tint = Color.White)
                     }
@@ -1048,6 +1104,9 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
                     }
                     IconButton(onClick = { controller?.seekTo((position + 10_000L).coerceAtMost(duration)) }) {
                         Icon(Icons.Default.FastForward, contentDescription = "Avançar", tint = Color.White)
+                    }
+                    IconButton(onClick = onNext) {
+                        Icon(Icons.Default.SkipNext, contentDescription = "Próximo vídeo", tint = Color.White)
                     }
                     IconButton(enabled = pipEnabled, onClick = { activity.enterVortexPip() }) {
                         Icon(Icons.Default.PictureInPictureAlt, contentDescription = "Picture-in-Picture", tint = if (pipEnabled) Color.White else Muted)
