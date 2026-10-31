@@ -6,6 +6,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.os.Build
@@ -13,6 +15,7 @@ import android.os.Bundle
 import android.provider.OpenableColumns
 import android.os.CancellationSignal
 import android.util.Rational
+import android.util.LruCache
 import android.util.Size
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -48,6 +51,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -55,10 +59,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.C
-import androidx.media3.cast.MediaRouteButton
+import androidx.media3.common.Tracks
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -103,6 +110,18 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             enterPictureInPictureMode(PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build())
         }
+    }
+
+    fun setPlayerLandscape(landscape: Boolean) {
+        requestedOrientation = if (landscape) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+        }
+    }
+
+    fun restoreDefaultOrientation() {
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
     }
 
     override fun onPictureInPictureModeChanged(value: Boolean, config: android.content.res.Configuration) {
@@ -646,22 +665,27 @@ private fun LibraryScreen(videos: List<LocalVideo>, favorites: Set<String>, onOp
     var sortExpanded by remember { mutableStateOf(false) }
     var detailsVideo by remember { mutableStateOf<LocalVideo?>(null) }
 
-    val filtered = videos.filter { video ->
-        val matchesQuery = video.title.contains(query, ignoreCase = true) || video.folder.contains(query, ignoreCase = true)
-        val matchesFilter = when (selectedFilter) {
-            "Favoritos" -> video.id.toString() in favorites
-            "Curtos" -> video.durationMs in 1L..600_000L
-            "Longos" -> video.durationMs >= 1_200_000L
-            "Recentes" -> video.dateAddedSeconds >= (System.currentTimeMillis() / 1000L) - 7L * 24L * 60L * 60L
-            else -> true
+    val filtered = remember(videos, query, selectedFilter, favorites) {
+        val recentCutoff = System.currentTimeMillis() / 1000L - 7L * 24L * 60L * 60L
+        videos.filter { video ->
+            val matchesQuery = video.title.contains(query, ignoreCase = true) || video.folder.contains(query, ignoreCase = true)
+            val matchesFilter = when (selectedFilter) {
+                "Favoritos" -> video.id.toString() in favorites
+                "Curtos" -> video.durationMs in 1L..600_000L
+                "Longos" -> video.durationMs >= 1_200_000L
+                "Recentes" -> video.dateAddedSeconds >= recentCutoff
+                else -> true
+            }
+            matchesQuery && matchesFilter
         }
-        matchesQuery && matchesFilter
     }
-    val sorted = when (sortBy) {
-        "Nome A–Z" -> filtered.sortedBy { it.title.lowercase(Locale.getDefault()) }
-        "Maior duração" -> filtered.sortedByDescending { it.durationMs }
-        "Maior tamanho" -> filtered.sortedByDescending { it.sizeBytes }
-        else -> filtered.sortedByDescending { it.dateAddedSeconds }
+    val sorted = remember(filtered, sortBy) {
+        when (sortBy) {
+            "Nome A–Z" -> filtered.sortedBy { it.title.lowercase(Locale.getDefault()) }
+            "Maior duração" -> filtered.sortedByDescending { it.durationMs }
+            "Maior tamanho" -> filtered.sortedByDescending { it.sizeBytes }
+            else -> filtered.sortedByDescending { it.dateAddedSeconds }
+        }
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
@@ -865,7 +889,7 @@ private fun SettingsScreen(
         SettingRow(Icons.Default.Refresh, "Atualizar biblioteca", "Voltar a procurar vídeos neste dispositivo", onRescan)
         SettingRow(Icons.Default.History, "Limpar histórico", "Apagar posições de retoma guardadas", onClearHistory)
         SettingRow(Icons.Default.Lock, "Privacidade", "Os vídeos permanecem no teu dispositivo")
-        SettingRow(Icons.Default.Cast, "Chromecast", "Base Media3 Cast incluída; ligação ao recetor na próxima etapa")
+        SettingRow(Icons.Default.Cast, "Chromecast", "Transmissão de vídeos locais ainda não está disponível nesta versão")
         HorizontalDivider(color = Color(0xFFECECF2))
         SettingsHeading("Aplicação")
         SettingRow(Icons.Default.Language, "Idioma", "Português")
@@ -920,24 +944,40 @@ private fun EmptyState(title: String, subtitle: String, icon: ImageVector) {
     }
 }
 
+private object VideoThumbnailCache {
+    private val cache = object : LruCache<String, Bitmap>(20 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
+    }
+
+    fun loadCached(uri: android.net.Uri): Bitmap? = cache.get(uri.toString())
+
+    suspend fun load(context: Context, uri: android.net.Uri): Bitmap? = withContext(Dispatchers.IO) {
+        val key = uri.toString()
+        cache.get(key)?.let { return@withContext it }
+        val bitmap = runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                context.contentResolver.loadThumbnail(uri, Size(384, 216), CancellationSignal())
+            } else {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(context, uri)
+                    retriever.getFrameAtTime(1_000_000)
+                } finally {
+                    retriever.release()
+                }
+            }
+        }.getOrNull()
+        if (bitmap != null) cache.put(key, bitmap)
+        bitmap
+    }
+}
+
 @Composable
 private fun VideoThumbnail(video: LocalVideo, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    var bitmap by remember(video.uri) { mutableStateOf<Bitmap?>(null) }
+    var bitmap by remember(video.uri) { mutableStateOf<Bitmap?>(VideoThumbnailCache.loadCached(video.uri)) }
     LaunchedEffect(video.uri) {
-        bitmap = withContext(Dispatchers.IO) {
-            runCatching {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    context.contentResolver.loadThumbnail(video.uri, Size(640, 360), CancellationSignal())
-                } else {
-                    val retriever = MediaMetadataRetriever()
-                    try {
-                        retriever.setDataSource(context, video.uri)
-                        retriever.getFrameAtTime(1_000_000)
-                    } finally { retriever.release() }
-                }
-            }.getOrNull()
-        }
+        bitmap = VideoThumbnailCache.load(context, video.uri)
     }
     Box(modifier.background(Brush.linearGradient(listOf(Color(0xFF171A3A), Color(0xFF5B31B8))))) {
         bitmap?.let {
@@ -945,6 +985,7 @@ private fun VideoThumbnail(video: LocalVideo, modifier: Modifier = Modifier) {
         } ?: Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White.copy(alpha = .85f), modifier = Modifier.align(Alignment.Center).size(34.dp))
     }
 }
+
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -961,13 +1002,19 @@ private fun PlayerScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
     var controller by remember(video.id) { mutableStateOf<MediaController?>(null) }
     var position by remember(video.id) { mutableLongStateOf(0L) }
     var duration by remember(video.id) { mutableLongStateOf(video.durationMs.coerceAtLeast(1L)) }
     var playing by remember(video.id) { mutableStateOf(false) }
-    var subtitles by remember(video.id) { mutableStateOf(true) }
+    var subtitles by remember(video.id) { mutableStateOf(false) }
+    var hasSubtitleTracks by remember(video.id) { mutableStateOf(false) }
     var externalSubtitleName by remember(video.id) { mutableStateOf<String?>(null) }
+    var pendingSubtitleName by remember(video.id) { mutableStateOf<String?>(null) }
+    var subtitleStatus by remember(video.id) { mutableStateOf("A verificar legendas deste vídeo…") }
     var speed by remember(video.id) { mutableStateOf(1.0f) }
+    var speedDialog by remember(video.id) { mutableStateOf(false) }
     var subtitleScale by remember(video.id) { mutableFloatStateOf(prefs.getFloat("subtitle_scale", 1.0f)) }
     var repeatOne by remember(video.id) { mutableStateOf(false) }
     var resizeMode by remember(video.id) { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
@@ -978,42 +1025,76 @@ private fun PlayerScreen(
     var dragPosition by remember(video.id) { mutableLongStateOf(0L) }
 
     val subtitlePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            val displayName = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getString(0) else null
-            } ?: "Legenda externa"
-            val mimeType = when {
-                displayName.endsWith(".srt", ignoreCase = true) -> MimeTypes.APPLICATION_SUBRIP
-                displayName.endsWith(".vtt", ignoreCase = true) -> MimeTypes.TEXT_VTT
-                else -> context.contentResolver.getType(uri) ?: MimeTypes.APPLICATION_SUBRIP
-            }
-            val subtitle = MediaItem.SubtitleConfiguration.Builder(uri)
-                .setMimeType(mimeType)
-                .setLanguage("pt")
-                .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                .build()
-            controller?.let { player ->
-                val resumeAt = player.currentPosition
-                val wasPlaying = player.isPlaying
-                val metadata = MediaMetadata.Builder()
-                    .setTitle(video.title)
-                    .setArtist("Vortex – Video Player")
-                    .setMediaType(MediaMetadata.MEDIA_TYPE_VIDEO)
-                    .build()
-                val item = MediaItem.Builder()
-                    .setUri(video.uri)
-                    .setMediaMetadata(metadata)
-                    .setSubtitleConfigurations(listOf(subtitle))
-                    .build()
-                player.setMediaItem(item)
-                player.prepare()
-                player.seekTo(resumeAt)
-                player.playWhenReady = wasPlaying
-                subtitles = true
-                externalSubtitleName = displayName
+        if (uri == null) {
+            subtitleStatus = "Nenhum ficheiro de legenda selecionado."
+        } else {
+            scope@ run {
+                val displayName = runCatching {
+                    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                        val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (cursor.moveToFirst() && index >= 0) cursor.getString(index) else null
+                    }
+                }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/') ?: "legenda"
+
+                val extension = displayName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+                val mimeType = when (extension) {
+                    "srt" -> MimeTypes.APPLICATION_SUBRIP
+                    "vtt" -> MimeTypes.TEXT_VTT
+                    "ass", "ssa" -> MimeTypes.TEXT_SSA
+                    "ttml", "xml" -> MimeTypes.APPLICATION_TTML
+                    else -> null
+                }
+
+                if (mimeType == null) {
+                    subtitleStatus = "Formato não suportado. Usa SRT, VTT, ASS, SSA ou TTML."
+                } else {
+                    val readable = runCatching {
+                        context.contentResolver.openInputStream(uri)?.use { input -> input.read() >= 0 } ?: false
+                    }.getOrDefault(false)
+
+                    if (!readable) {
+                        subtitleStatus = "Não foi possível ler este ficheiro de legenda."
+                    } else {
+                        runCatching {
+                            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        val player = controller
+                        if (player == null) {
+                            subtitleStatus = "O leitor ainda está a iniciar. Tenta novamente."
+                        } else {
+                            val resumeAt = player.currentPosition.coerceAtLeast(0L)
+                            val wasPlaying = player.isPlaying
+                            val metadata = MediaMetadata.Builder()
+                                .setTitle(video.title)
+                                .setArtist("Vortex – Video Player")
+                                .setMediaType(MediaMetadata.MEDIA_TYPE_VIDEO)
+                                .build()
+                            val subtitle = MediaItem.SubtitleConfiguration.Builder(uri)
+                                .setMimeType(mimeType)
+                                .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                                .build()
+                            val item = MediaItem.Builder()
+                                .setUri(video.uri)
+                                .setMediaMetadata(metadata)
+                                .setSubtitleConfigurations(listOf(subtitle))
+                                .build()
+
+                            pendingSubtitleName = displayName
+                            externalSubtitleName = null
+                            hasSubtitleTracks = false
+                            subtitles = false
+                            subtitleStatus = "A carregar legenda: $displayName"
+                            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                .build()
+                            player.setMediaItem(item)
+                            player.prepare()
+                            player.seekTo(resumeAt)
+                            player.setPlaybackSpeed(speed)
+                            player.playWhenReady = wasPlaying
+                        }
+                    }
+                }
             }
         }
     }
@@ -1046,6 +1127,70 @@ private fun PlayerScreen(
         onDispose { disposed = true; MediaController.releaseFuture(future) }
     }
 
+    DisposableEffect(activity) {
+        onDispose {
+            activity.restoreDefaultOrientation()
+            WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+                .show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    DisposableEffect(activity, isLandscape) {
+        val bars = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+        if (isLandscape) {
+            bars.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            bars.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            bars.show(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose { bars.show(WindowInsetsCompat.Type.systemBars()) }
+    }
+
+    DisposableEffect(controller) {
+        val player = controller
+        if (player == null) {
+            onDispose { }
+        } else {
+            val listener = object : Player.Listener {
+                override fun onTracksChanged(tracks: Tracks) {
+                    val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT && it.isSupported }
+                    hasSubtitleTracks = textGroups.isNotEmpty()
+                    subtitles = textGroups.any { it.isSelected }
+
+                    val pending = pendingSubtitleName
+                    if (pending != null && hasSubtitleTracks) {
+                        externalSubtitleName = pending
+                        pendingSubtitleName = null
+                        subtitleStatus = "Legenda carregada: $pending"
+                    } else if (pending == null && externalSubtitleName == null) {
+                        subtitleStatus = when {
+                            subtitles -> "Legendas incorporadas ativas."
+                            hasSubtitleTracks -> "Há legendas incorporadas disponíveis."
+                            else -> "Este vídeo não apresenta legendas incorporadas."
+                        }
+                    }
+                }
+
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_READY && pendingSubtitleName != null && !hasSubtitleTracks) {
+                        subtitleStatus = "A legenda não foi reconhecida. Confirma se o ficheiro está válido."
+                        pendingSubtitleName = null
+                    }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    if (pendingSubtitleName != null) {
+                        subtitleStatus = "Erro ao carregar legenda: ${error.errorCodeName}"
+                        pendingSubtitleName = null
+                        externalSubtitleName = null
+                    }
+                }
+            }
+            player.addListener(listener)
+            onDispose { player.removeListener(listener) }
+        }
+    }
+
     LaunchedEffect(sleepMinutes, controller) {
         val minutes = sleepMinutes ?: return@LaunchedEffect
         delay(minutes * 60_000L)
@@ -1063,7 +1208,7 @@ private fun PlayerScreen(
                 val savedPosition = if (duration > 0L && player.currentPosition >= duration - 2_000L) 0L else player.currentPosition.coerceAtLeast(0L)
                 saveWatchProgress(prefs, video, savedPosition, duration)
             }
-            delay(2_000)
+            delay(5_000)
         }
     }
 
@@ -1103,23 +1248,50 @@ private fun PlayerScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(Color.Black).navigationBarsPadding()) {
+    Column(
+        Modifier.fillMaxSize().background(Color.Black)
+            .then(if (isLandscape) Modifier else Modifier.navigationBarsPadding())
+    ) {
         if (!activity.isInPipMode) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Voltar", tint = Color.White) }
-                Column(Modifier.weight(1f)) {
-                    Text(video.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("VORTEX PLAYER", color = Color(0xFFBBA8FF), fontSize = 9.sp, letterSpacing = 1.4.sp)
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = if (isLandscape) 6.dp else 10.dp, vertical = if (isLandscape) 2.dp else 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = "Voltar", tint = Color.White)
                 }
-                IconButton(onClick = {
-                    controller?.let { player ->
-                        subtitles = !subtitles
-                        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !subtitles).build()
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        video.title,
+                        color = Color.White,
+                        fontSize = if (isLandscape) 11.sp else 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (!isLandscape) {
+                        Text("VORTEX PLAYER", color = Color(0xFFBBA8FF), fontSize = 9.sp, letterSpacing = 1.4.sp)
                     }
-                }) { Icon(Icons.Default.Subtitles, contentDescription = "Ativar ou desativar legendas", tint = if (subtitles) Color.White else Muted) }
-                MediaRouteButton(modifier = Modifier.size(42.dp))
-                IconButton(onClick = { subtitlePicker.launch(arrayOf("application/x-subrip", "text/vtt", "text/plain")) }) {
-                    Icon(Icons.Default.Add, contentDescription = "Adicionar ficheiro de legendas", tint = Color.White)
+                }
+                IconButton(
+                    enabled = controller != null,
+                    onClick = {
+                        val player = controller ?: return@IconButton
+                        if (!hasSubtitleTracks) {
+                            subtitleStatus = "Sem faixa de legenda. Adiciona um ficheiro SRT, VTT, ASS, SSA ou TTML."
+                        } else {
+                            subtitles = !subtitles
+                            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !subtitles)
+                                .build()
+                            subtitleStatus = if (subtitles) "Legendas ativadas." else "Legendas desativadas."
+                        }
+                    }
+                ) {
+                    Icon(Icons.Default.Subtitles, contentDescription = "Ativar ou desativar legendas", tint = if (subtitles) Color(0xFFBBA8FF) else Color.White)
+                }
+                IconButton(onClick = { activity.setPlayerLandscape(!isLandscape) }) {
+                    Icon(Icons.Default.ScreenRotation, contentDescription = if (isLandscape) "Rodar para vertical" else "Assistir na horizontal", tint = Color.White)
                 }
                 IconButton(enabled = pipEnabled, onClick = { activity.enterVortexPip() }) {
                     Icon(Icons.Default.PictureInPictureAlt, contentDescription = "Picture-in-Picture", tint = if (pipEnabled) Color.White else Muted)
@@ -1130,16 +1302,12 @@ private fun PlayerScreen(
                     }
                     DropdownMenu(expanded = toolsExpanded, onDismissRequest = { toolsExpanded = false }) {
                         DropdownMenuItem(
-                            text = { Text("Ajustar ao ecrã") },
-                            onClick = { resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; toolsExpanded = false }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Preencher e cortar") },
-                            onClick = { resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM; toolsExpanded = false }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Esticar imagem") },
-                            onClick = { resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL; toolsExpanded = false }
+                            text = { Text("Adicionar legenda externa") },
+                            leadingIcon = { Icon(Icons.Default.Subtitles, contentDescription = null) },
+                            onClick = {
+                                toolsExpanded = false
+                                subtitlePicker.launch(arrayOf("*/*"))
+                            }
                         )
                         DropdownMenuItem(
                             text = { Text("Selecionar faixa de áudio") },
@@ -1155,14 +1323,34 @@ private fun PlayerScreen(
                             text = { Text("Selecionar faixa de legendas") },
                             leadingIcon = { Icon(Icons.Default.Subtitles, contentDescription = null) },
                             onClick = {
-                                controller?.let { player ->
+                                val player = controller
+                                if (player != null && hasSubtitleTracks) {
                                     TrackSelectionDialogBuilder(context, "Faixa de legendas", player, C.TRACK_TYPE_TEXT)
                                         .setShowDisableOption(true)
                                         .build()
                                         .show()
+                                } else {
+                                    subtitleStatus = "Não existem faixas de legenda disponíveis neste vídeo."
                                 }
                                 toolsExpanded = false
                             }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Velocidade de reprodução") },
+                            leadingIcon = { Icon(Icons.Default.Speed, contentDescription = null) },
+                            onClick = { speedDialog = true; toolsExpanded = false }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Ajustar ao ecrã") },
+                            onClick = { resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT; toolsExpanded = false }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Preencher e cortar") },
+                            onClick = { resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM; toolsExpanded = false }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Esticar imagem") },
+                            onClick = { resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL; toolsExpanded = false }
                         )
                         DropdownMenuItem(
                             text = { Text("Legendas pequenas") },
@@ -1226,7 +1414,13 @@ private fun PlayerScreen(
             }
         )
         if (!activity.isInPipMode) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 14.dp)) {
+            Column(
+                Modifier.fillMaxWidth().padding(
+                    horizontal = if (isLandscape) 36.dp else 22.dp,
+                    vertical = if (isLandscape) 3.dp else 14.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(if (isLandscape) 2.dp else 8.dp)
+            ) {
                 Slider(
                     value = (if (dragging) dragPosition else position).toFloat().coerceIn(0f, duration.toFloat()),
                     onValueChange = { dragging = true; dragPosition = it.toLong() },
@@ -1235,14 +1429,20 @@ private fun PlayerScreen(
                     colors = SliderDefaults.colors(thumbColor = Purple, activeTrackColor = Purple, inactiveTrackColor = Color(0xFF494957))
                 )
                 Row {
-                    Text(formatDuration(if (dragging) dragPosition else position), color = Color.White, fontSize = 11.sp)
+                    Text(formatDuration(if (dragging) dragPosition else position), color = Color.White, fontSize = 10.sp)
                     Spacer(Modifier.weight(1f))
-                    Text(formatDuration(duration), color = Color(0xFF9B9BAA), fontSize = 11.sp)
+                    Text(formatDuration(duration), color = Color(0xFF9B9BAA), fontSize = 10.sp)
                 }
-                externalSubtitleName?.let {
-                    Text("Legenda: $it", color = Color(0xFFBBA8FF), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (subtitleStatus.isNotBlank()) {
+                    Text(
+                        subtitleStatus,
+                        color = if (subtitleStatus.startsWith("Erro") || subtitleStatus.startsWith("Não foi")) Color(0xFFFF9BA8) else Color(0xFFBBA8FF),
+                        fontSize = if (isLandscape) 9.sp else 10.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
-                if (sleepMinutes != null || repeatOne || resizeMode != AspectRatioFrameLayout.RESIZE_MODE_FIT) {
+                if (!isLandscape && (sleepMinutes != null || repeatOne || resizeMode != AspectRatioFrameLayout.RESIZE_MODE_FIT)) {
                     Text(
                         listOfNotNull(
                             if (repeatOne) "Repetir ativo" else null,
@@ -1250,22 +1450,31 @@ private fun PlayerScreen(
                             if (resizeMode == AspectRatioFrameLayout.RESIZE_MODE_ZOOM) "Preencher" else if (resizeMode == AspectRatioFrameLayout.RESIZE_MODE_FILL) "Esticado" else null
                         ).joinToString("  •  "),
                         color = Color(0xFFBBA8FF),
-                        fontSize = 10.sp
+                        fontSize = 9.sp
                     )
                 }
-                Spacer(Modifier.height(10.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     IconButton(onClick = onPrevious) {
                         Icon(Icons.Default.SkipPrevious, contentDescription = "Vídeo anterior", tint = Color.White)
                     }
                     IconButton(onClick = { controller?.seekTo((position - 10_000L).coerceAtLeast(0L)) }) {
                         Icon(Icons.Default.Replay10, contentDescription = "Retroceder 10 segundos", tint = Color.White)
                     }
-                    Box(Modifier.size(58.dp).clip(CircleShape).background(Purple).clickable {
-                        if (playing) controller?.pause() else controller?.play()
-                        playing = !playing
-                    }, contentAlignment = Alignment.Center) {
-                        Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play/Pause", tint = Color.White, modifier = Modifier.size(34.dp))
+                    Box(
+                        Modifier.size(if (isLandscape) 48.dp else 58.dp)
+                            .clip(CircleShape)
+                            .background(Purple)
+                            .clickable {
+                                if (playing) controller?.pause() else controller?.play()
+                                playing = !playing
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play/Pause", tint = Color.White, modifier = Modifier.size(31.dp))
                     }
                     IconButton(onClick = { controller?.seekTo((position + 10_000L).coerceAtMost(duration)) }) {
                         Icon(Icons.Default.Forward10, contentDescription = "Avançar 10 segundos", tint = Color.White)
@@ -1275,26 +1484,56 @@ private fun PlayerScreen(
                     }
                 }
                 Row(
-                    Modifier.fillMaxWidth().padding(top = 4.dp),
+                    Modifier.fillMaxWidth().padding(top = if (isLandscape) 0.dp else 3.dp),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = {
-                        speed = when (speed) { 0.75f -> 1f; 1f -> 1.25f; 1.25f -> 1.5f; 1.5f -> 2f; else -> 0.75f }
-                        controller?.setPlaybackSpeed(speed)
-                    }) {
+                    TextButton(onClick = { speedDialog = true }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp)) {
                         Icon(Icons.Default.Speed, contentDescription = null, tint = Color(0xFFBBA8FF), modifier = Modifier.size(17.dp))
                         Spacer(Modifier.width(5.dp))
                         Text(speed.toString() + "x", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
-                    Spacer(Modifier.width(20.dp))
+                    Spacer(Modifier.width(18.dp))
                     IconButton(enabled = pipEnabled, onClick = { activity.enterVortexPip() }) {
                         Icon(Icons.Default.PictureInPictureAlt, contentDescription = "Picture-in-Picture", tint = if (pipEnabled) Color.White else Muted)
+                    }
+                    IconButton(onClick = { activity.setPlayerLandscape(!isLandscape) }) {
+                        Icon(Icons.Default.ScreenRotation, contentDescription = if (isLandscape) "Rodar para vertical" else "Assistir na horizontal", tint = Color.White)
                     }
                 }
             }
         }
     }
+
+    if (speedDialog) {
+        AlertDialog(
+            onDismissRequest = { speedDialog = false },
+            icon = { Icon(Icons.Default.Speed, contentDescription = null, tint = Purple) },
+            title = { Text("Velocidade de reprodução") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    listOf(0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f).chunked(3).forEach { rowSpeeds ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            rowSpeeds.forEach { value ->
+                                FilterChip(
+                                    selected = speed == value,
+                                    onClick = {
+                                        speed = value
+                                        controller?.setPlaybackSpeed(value)
+                                        speedDialog = false
+                                    },
+                                    label = { Text("${value}x", fontSize = 11.sp) }
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { speedDialog = false }) { Text("Fechar") } },
+            shape = RoundedCornerShape(24.dp)
+        )
+    }
+
 
     if (timerDialog) {
         AlertDialog(
