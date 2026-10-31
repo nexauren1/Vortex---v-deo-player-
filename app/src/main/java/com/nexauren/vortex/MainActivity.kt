@@ -66,6 +66,8 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.SubtitleView
+import androidx.media3.ui.TrackSelectionDialogBuilder
 import com.nexauren.vortex.data.LocalVideo
 import com.nexauren.vortex.data.VideoRepository
 import com.nexauren.vortex.playback.PlaybackService
@@ -771,6 +773,7 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
     var subtitles by remember(video.id) { mutableStateOf(true) }
     var externalSubtitleName by remember(video.id) { mutableStateOf<String?>(null) }
     var speed by remember(video.id) { mutableStateOf(1.0f) }
+    var subtitleScale by remember(video.id) { mutableFloatStateOf(prefs.getFloat("subtitle_scale", 1.0f)) }
     var repeatOne by remember(video.id) { mutableStateOf(false) }
     var resizeMode by remember(video.id) { mutableIntStateOf(AspectRatioFrameLayout.RESIZE_MODE_FIT) }
     var toolsExpanded by remember(video.id) { mutableStateOf(false) }
@@ -917,6 +920,53 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
                             onClick = { resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL; toolsExpanded = false }
                         )
                         DropdownMenuItem(
+                            text = { Text("Selecionar faixa de áudio") },
+                            leadingIcon = { Icon(Icons.Default.VolumeUp, contentDescription = null) },
+                            onClick = {
+                                controller?.let { player ->
+                                    TrackSelectionDialogBuilder(context, "Faixa de áudio", player, C.TRACK_TYPE_AUDIO).build().show()
+                                }
+                                toolsExpanded = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Selecionar faixa de legendas") },
+                            leadingIcon = { Icon(Icons.Default.Subtitles, contentDescription = null) },
+                            onClick = {
+                                controller?.let { player ->
+                                    TrackSelectionDialogBuilder(context, "Faixa de legendas", player, C.TRACK_TYPE_TEXT)
+                                        .setShowDisableOption(true)
+                                        .build()
+                                        .show()
+                                }
+                                toolsExpanded = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Legendas pequenas") },
+                            onClick = {
+                                subtitleScale = 0.85f
+                                prefs.edit().putFloat("subtitle_scale", subtitleScale).apply()
+                                toolsExpanded = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Legendas normais") },
+                            onClick = {
+                                subtitleScale = 1.0f
+                                prefs.edit().putFloat("subtitle_scale", subtitleScale).apply()
+                                toolsExpanded = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Legendas grandes") },
+                            onClick = {
+                                subtitleScale = 1.25f
+                                prefs.edit().putFloat("subtitle_scale", subtitleScale).apply()
+                                toolsExpanded = false
+                            }
+                        )
+                        DropdownMenuItem(
                             text = { Text(if (repeatOne) "Desativar repetição" else "Repetir este vídeo") },
                             leadingIcon = { Icon(Icons.Default.RepeatOne, contentDescription = null) },
                             onClick = {
@@ -947,6 +997,10 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
             update = {
                 it.player = controller
                 it.resizeMode = resizeMode
+                it.subtitleView?.apply {
+                    setApplyEmbeddedStyles(false)
+                    setFractionalTextSize(SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * subtitleScale)
+                }
             }
         )
         if (!activity.isInPipMode) {
