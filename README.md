@@ -1,46 +1,49 @@
 # Vortex – Video Player
 
-Reprodutor Android de vídeos locais com identidade visual clara, acabamento premium e detalhes em roxo/azul, seguindo a referência visual aprovada.
+Reprodutor Android de vídeos locais com interface clara premium, detalhes em roxo/azul e ecrã de reprodução escuro, seguindo a referência visual aprovada.
 
-## Estado atual
-
-**Primeira fundação implementada no repositório.** O projeto inclui:
+## Implementado nesta primeira etapa
 
 - Aplicação Android nativa em Kotlin.
 - Interface Jetpack Compose com boas-vindas, Início, Biblioteca, Pastas, Favoritos e Definições.
-- Biblioteca local baseada em MediaStore, com permissões ajustadas por versão do Android.
-- Miniaturas locais dos vídeos.
-- Favoritos guardados no dispositivo.
+- Identidade visual branca com gradientes violeta/azul e ícone adaptativo Vortex.
+- Descoberta de vídeos locais via MediaStore, com permissões para Android 13/14+ e versões anteriores.
+- Miniaturas locais, pesquisa na biblioteca, agrupamento por pastas e favoritos persistidos.
 - Reprodução com AndroidX Media3 / ExoPlayer.
-- MediaSessionService para manter a sessão de reprodução fora do ecrã da aplicação.
-- Controlo de velocidade, avanço/retrocesso, legendas incorporadas e entrada manual em Picture-in-Picture.
-- Dependência e configuração inicial de Media3 Cast no manifesto.
+- MediaSessionService para manter a sessão multimédia disponível fora do ecrã da aplicação.
+- Controlos de reprodução, busca na timeline, velocidade, legendas incorporadas e entrada manual em Picture-in-Picture.
+- Seletor de ficheiros de legendas externas SRT e WebVTT.
+- Media3 CastPlayer e botão de seleção de dispositivos Cast integrados no ecrã de reprodução.
+- Metadados de título/tipo de vídeo associados à sessão e ao item multimédia.
+- Workflow GitHub Actions para compilar o APK de depuração.
 
 ## Stack
 
-- Kotlin (AGP 9 built-in Kotlin)
+- Kotlin 2.4.10
+- Android Gradle Plugin 9.1.0
 - Jetpack Compose + Material 3
 - AndroidX Media3 1.11.1
 - MediaStore
 - MediaSessionService
-- Google Cast através do módulo Media3 Cast
+- Media3 CastPlayer
 
 ## Abrir o projeto
 
 1. Abrir a pasta do repositório no Android Studio.
-2. Usar JDK 17.
-3. Sincronizar com Gradle 9.3.1 e Android Gradle Plugin 9.1.1.
-4. Instalar Android SDK 37.
-5. Executar em dispositivo Android ou emulador. Para testar a biblioteca, o dispositivo deve conter vídeos locais.
+2. Usar JDK 17 e Gradle 9.3.1.
+3. Instalar o Android SDK Platform 36 e Build Tools 36.0.0.
+4. Sincronizar o Gradle e executar a configuração `app`.
+5. Testar num dispositivo Android com vídeos locais.
 
 Package: `com.nexauren.vortex`
 
-## Próximas etapas
+## Trabalho ainda necessário antes de release
 
-1. Compilar e corrigir eventuais incompatibilidades no ambiente Android Studio.
-2. Integrar o seletor Cast e a transferência real de reprodução para dispositivos compatíveis.
-3. Adicionar seleção/importação de legendas externas (SRT/VTT), sincronização e personalização.
-4. Completar PiP automático, histórico com posição de retoma e gestão de permissões em Android 14+.
-5. Testar em dispositivos físicos, otimizar miniaturas e validar release APK/AAB.
+1. Concluir e validar a compilação do APK de depuração pelo workflow.
+2. Implementar o servidor HTTP local/URI acessível na rede para transmitir ficheiros `content://` locais ao recetor Chromecast. O CastPlayer e o seletor de dispositivos já estão integrados, mas a transmissão de ficheiros locais ainda não deve ser considerada concluída até esta ponte estar pronta e testada numa TV/recetor real.
+3. Acrescentar personalização completa de legendas (tamanho, cor, fundo, posição e sincronização).
+4. Guardar histórico e posição de retoma por vídeo.
+5. Testar Picture-in-Picture, reprodução prolongada em segundo plano, permissões parciais do Android 14+ e formatos em vários dispositivos.
+6. Validar APK/AAB de release, ícone, tradução e comportamento em dispositivos reais.
 
-> As imagens de referência são o alvo visual. A configuração de Cast já está preparada no projeto, mas a transmissão remota ainda requer a integração do CastPlayer e testes com um recetor compatível. Não considerar esta versão pronta para publicação.
+> Esta é uma primeira implementação funcional em evolução, não uma versão final pronta para publicação na Play Store. As imagens de referência são o alvo visual; a interface e a lógica estão a ser construídas em etapas.
