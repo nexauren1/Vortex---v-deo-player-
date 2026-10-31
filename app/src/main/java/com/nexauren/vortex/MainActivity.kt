@@ -901,7 +901,9 @@ private fun SettingRow(icon: ImageVector, title: String, subtitle: String, onCli
             Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Ink)
             Text(subtitle, fontSize = 10.sp, color = Muted)
         }
-        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted)
+        if (onClick != null) {
+            Icon(Icons.Default.ChevronRight, contentDescription = null, tint = Muted)
+        }
     }
 }
 
