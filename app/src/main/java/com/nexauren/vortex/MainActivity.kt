@@ -4,11 +4,13 @@ import android.Manifest
 import android.app.PictureInPictureParams
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.Bundle
+import android.provider.OpenableColumns
 import android.os.CancellationSignal
 import android.util.Rational
 import android.util.Size
@@ -55,6 +57,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.media3.ui.PlayerView
@@ -570,9 +573,45 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
     var duration by remember(video.id) { mutableLongStateOf(video.durationMs.coerceAtLeast(1L)) }
     var playing by remember(video.id) { mutableStateOf(false) }
     var subtitles by remember(video.id) { mutableStateOf(true) }
+    var externalSubtitleName by remember(video.id) { mutableStateOf<String?>(null) }
     var speed by remember(video.id) { mutableStateOf(1.0f) }
     var dragging by remember(video.id) { mutableStateOf(false) }
     var dragPosition by remember(video.id) { mutableLongStateOf(0L) }
+
+    val subtitlePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val displayName = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0) else null
+            } ?: "Legenda externa"
+            val mimeType = when {
+                displayName.endsWith(".srt", ignoreCase = true) -> MimeTypes.APPLICATION_SUBRIP
+                displayName.endsWith(".vtt", ignoreCase = true) -> MimeTypes.TEXT_VTT
+                else -> context.contentResolver.getType(uri) ?: MimeTypes.APPLICATION_SUBRIP
+            }
+            val subtitle = MediaItem.SubtitleConfiguration.Builder(uri)
+                .setMimeType(mimeType)
+                .setLanguage("pt")
+                .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                .build()
+            controller?.let { player ->
+                val resumeAt = player.currentPosition
+                val wasPlaying = player.isPlaying
+                val item = MediaItem.Builder()
+                    .setUri(video.uri)
+                    .setSubtitleConfigurations(listOf(subtitle))
+                    .build()
+                player.setMediaItem(item)
+                player.prepare()
+                player.seekTo(resumeAt)
+                player.playWhenReady = wasPlaying
+                subtitles = true
+                externalSubtitleName = displayName
+            }
+        }
+    }
 
     val future = remember(video.id) {
         MediaController.Builder(context, SessionToken(context, ComponentName(context, PlaybackService::class.java))).buildAsync()
@@ -615,7 +654,10 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
                         subtitles = !subtitles
                         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !subtitles).build()
                     }
-                }) { Icon(Icons.Default.Subtitles, contentDescription = "Legendas", tint = if (subtitles) Color.White else Muted) }
+                }) { Icon(Icons.Default.Subtitles, contentDescription = "Ativar ou desativar legendas", tint = if (subtitles) Color.White else Muted) }
+                IconButton(onClick = { subtitlePicker.launch(arrayOf("application/x-subrip", "text/vtt", "text/plain")) }) {
+                    Icon(Icons.Default.Add, contentDescription = "Adicionar ficheiro de legendas", tint = Color.White)
+                }
                 IconButton(enabled = pipEnabled, onClick = { activity.enterVortexPip() }) {
                     Icon(Icons.Default.PictureInPictureAlt, contentDescription = "Picture-in-Picture", tint = if (pipEnabled) Color.White else Muted)
                 }
@@ -645,6 +687,9 @@ private fun PlayerScreen(activity: MainActivity, video: LocalVideo, pipEnabled: 
                     Text(formatDuration(if (dragging) dragPosition else position), color = Color.White, fontSize = 11.sp)
                     Spacer(Modifier.weight(1f))
                     Text(formatDuration(duration), color = Color(0xFF9B9BAA), fontSize = 11.sp)
+                }
+                externalSubtitleName?.let {
+                    Text("Legenda: $it", color = Color(0xFFBBA8FF), fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Spacer(Modifier.height(10.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
