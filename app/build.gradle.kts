@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.nexauren.vortex"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.nexauren.vortex"
